@@ -1,0 +1,32 @@
+[package]
+name = "faultline"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+authors = ["grimh3xx"]
+description = "faultline — an exploit-development toolkit: ROP gadgets, cyclic patterns, checksec, bad-char sets and a crash fuzzer"
+repository = "https://github.com/grimh3xx/faultline"
+license = "MIT"
+keywords = ["security", "exploit-dev", "rop", "fuzzing", "ctf"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "README.md"
+
+[[bin]]
+name = "faultline"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+goblin = "0.8"
+iced-x86 = "1.21"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+owo-colors = { version = "4", features = ["supports-colors"] }
+anyhow = "1"
+rand = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1
