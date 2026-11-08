@@ -88,11 +88,11 @@ fn mutate(seed: &[u8], max_mutations: usize, rng: &mut impl Rng) -> Vec<u8> {
     buf
 }
 
-/// Run one input and return the terminating signal, if any.
-#[cfg(unix)]
-fn run_once(opts: &FuzzOpts, input: &[u8]) -> Result<Option<i32>> {
-    use std::os::unix::process::ExitStatusExt;
-
+/// Spawn the target with the input delivered per `opts`, poll with the timeout,
+/// and return the raw exit status (or `None` if we killed it for hanging).
+/// Shared across platforms so delivery, timeout and temp-file handling are
+/// identical; only the crash interpretation in `run_once` differs.
+fn run_target(opts: &FuzzOpts, input: &[u8]) -> Result<Option<std::process::ExitStatus>> {
     let mut tmp: Option<TempFile> = None;
     let mut cmd = Command::new(&opts.target);
     match &opts.delivery {
@@ -134,9 +134,9 @@ fn run_once(opts: &FuzzOpts, input: &[u8]) -> Result<Option<i32>> {
 
     // Poll with a timeout; kill if the target hangs.
     let deadline = Instant::now() + opts.timeout;
-    let signal = loop {
+    let status = loop {
         match child.try_wait()? {
-            Some(status) => break status.signal(),
+            Some(status) => break Some(status),
             None => {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
@@ -148,30 +148,27 @@ fn run_once(opts: &FuzzOpts, input: &[u8]) -> Result<Option<i32>> {
         }
     };
     drop(tmp);
-    Ok(signal)
+    Ok(status)
+}
+
+/// Run one input and return a crash indicator: the terminating signal on Unix,
+/// or an abnormal (>= 0xC0000000) exit code on Windows.
+#[cfg(unix)]
+fn run_once(opts: &FuzzOpts, input: &[u8]) -> Result<Option<i32>> {
+    use std::os::unix::process::ExitStatusExt;
+    Ok(run_target(opts, input)?.and_then(|s| s.signal()))
 }
 
 #[cfg(not(unix))]
 fn run_once(opts: &FuzzOpts, input: &[u8]) -> Result<Option<i32>> {
-    // Non-Unix: treat an abnormal (>= 0xC0000000) exit code as a crash.
-    let mut cmd = Command::new(&opts.target);
-    cmd.args(&opts.args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let mut child = cmd
-        .spawn()
-        .with_context(|| format!("spawning {}", opts.target))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(input);
-    }
-    let status = child.wait()?;
-    let code = status.code().unwrap_or(0);
-    Ok(if (code as u32) >= 0xC000_0000 {
-        Some(code)
-    } else {
-        None
-    })
+    Ok(run_target(opts, input)?.and_then(|s| {
+        let code = s.code().unwrap_or(0);
+        if (code as u32) >= 0xC000_0000 {
+            Some(code)
+        } else {
+            None
+        }
+    }))
 }
 
 /// RAII temp-file cleanup helper (File delivery).
